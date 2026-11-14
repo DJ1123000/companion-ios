@@ -1,0 +1,4 @@
+.derived/
+*.ipa
+.DS_Store
+xcuserdata/
