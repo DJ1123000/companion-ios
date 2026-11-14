@@ -35,8 +35,6 @@ struct ContentView: View {
                 AvatarHeroView(state: avatarState, statusText: avatarStatusText)
                     .padding(.top, 10)
 
-                voicePickerRow
-
                 messageArea
 
                 Divider()
@@ -86,23 +84,6 @@ struct ContentView: View {
         case .disconnected: return .gray
         case .failed: return .red
         }
-    }
-
-    private var voicePickerRow: some View {
-        HStack(spacing: 8) {
-            Text("音色")
-                .font(.footnote)
-                .foregroundColor(.secondary)
-            Picker("音色", selection: $viewModel.selectedVoiceId) {
-                ForEach(viewModel.voices) { voice in
-                    Text(voice.name).tag(voice.id)
-                }
-            }
-            .pickerStyle(.menu)
-            Spacer()
-        }
-        .padding(.horizontal)
-        .padding(.top, 8)
     }
 
     /// Compact message area below the avatar; the avatar stays the hero.
