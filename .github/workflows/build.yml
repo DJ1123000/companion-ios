@@ -17,7 +17,7 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer || true
 
       - name: Build IPA
-        run: bash ./build.sh
+        run: ./build.sh
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
