@@ -3,52 +3,44 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var viewModel = ChatViewModel()
 
+    /// What the avatar is doing right now, derived from the view model.
+    private enum AvatarState: Equatable {
+        case idle, listening, speaking, thinking, disconnected
+    }
+
+    private var avatarState: AvatarState {
+        if viewModel.isRecording { return .listening }
+        if viewModel.isSpeaking { return .speaking }
+        if viewModel.isWaitingReply { return .thinking }
+        if viewModel.isConnected { return .idle }
+        return .disconnected
+    }
+
+    private var avatarStatusText: String {
+        switch avatarState {
+        case .idle: return "已连接，随时可以聊天"
+        case .listening: return "正在听…"
+        case .speaking: return "正在说…"
+        case .thinking: return "思考中…"
+        case .disconnected: return viewModel.statusText
+        }
+    }
+
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
                 statusBar
 
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 12) {
-                            if viewModel.messages.isEmpty {
-                                Text("按住下方按钮说话，或输入文字开始聊天")
-                                    .foregroundColor(.secondary)
-                                    .multilineTextAlignment(.center)
-                                    .padding(.top, 40)
-                                    .padding(.horizontal, 32)
-                            }
-                            ForEach(viewModel.messages) { message in
-                                messageRow(message)
-                                    .id(message.id)
-                            }
-                            if viewModel.isWaitingReply {
-                                HStack {
-                                    ProgressView()
-                                        .progressViewStyle(CircularProgressViewStyle())
-                                    Text("对方正在思考…")
-                                        .foregroundColor(.secondary)
-                                    Spacer()
-                                }
-                                .padding(.horizontal)
-                            }
-                        }
-                        .padding(.vertical, 12)
-                    }
-                    .onChange(of: viewModel.messages.count) { _ in
-                        if let last = viewModel.messages.last {
-                            withAnimation {
-                                proxy.scrollTo(last.id, anchor: .bottom)
-                            }
-                        }
-                    }
-                }
+                AvatarHeroView(state: avatarState, statusText: avatarStatusText)
+                    .padding(.top, 10)
+
+                voicePickerRow
+
+                messageArea
 
                 Divider()
 
                 textInputRow
-
-                voicePickerRow
 
                 holdToTalkButton
                     .padding(.top, 12)
@@ -95,28 +87,6 @@ struct ContentView: View {
         }
     }
 
-    private func messageRow(_ message: ChatMessage) -> some View {
-        HStack {
-            if message.role == .user { Spacer(minLength: 48) }
-            Text(message.text)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(bubbleColor(for: message.role))
-                .foregroundColor(message.role == .user ? .white : .primary)
-                .cornerRadius(16)
-            if message.role != .user { Spacer(minLength: 48) }
-        }
-        .padding(.horizontal)
-    }
-
-    private func bubbleColor(for role: ChatMessage.Role) -> Color {
-        switch role {
-        case .user: return .blue
-        case .assistant: return Color(.systemGray5)
-        case .error: return Color(.systemRed).opacity(0.15)
-        }
-    }
-
     private var voicePickerRow: some View {
         HStack(spacing: 8) {
             Text("音色")
@@ -132,6 +102,68 @@ struct ContentView: View {
         }
         .padding(.horizontal)
         .padding(.top, 8)
+    }
+
+    /// Compact message area below the avatar; the avatar stays the hero.
+    private var messageArea: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    if viewModel.messages.isEmpty {
+                        Text("按住下方按钮说话，或输入文字开始聊天")
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.top, 24)
+                            .padding(.horizontal, 32)
+                    }
+                    ForEach(viewModel.messages) { message in
+                        messageRow(message)
+                            .id(message.id)
+                    }
+                    if viewModel.isWaitingReply {
+                        HStack {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                            Text("对方正在思考…")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                        }
+                        .padding(.horizontal)
+                    }
+                }
+                .padding(.vertical, 10)
+            }
+            .onChange(of: viewModel.messages.count) { _ in
+                if let last = viewModel.messages.last {
+                    withAnimation {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+            }
+        }
+    }
+
+    private func messageRow(_ message: ChatMessage) -> some View {
+        HStack {
+            if message.role == .user { Spacer(minLength: 48) }
+            Text(message.text)
+                .font(.subheadline)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(bubbleColor(for: message.role))
+                .foregroundColor(message.role == .user ? .white : .primary)
+                .cornerRadius(14)
+            if message.role != .user { Spacer(minLength: 48) }
+        }
+        .padding(.horizontal)
+    }
+
+    private func bubbleColor(for role: ChatMessage.Role) -> Color {
+        switch role {
+        case .user: return .blue
+        case .assistant: return Color(.systemGray5)
+        case .error: return Color(.systemRed).opacity(0.15)
+        }
     }
 
     private var textInputRow: some View {
@@ -176,6 +208,123 @@ struct ContentView: View {
                 .offset(y: 58)
         )
         .accessibilityLabel(recording ? "正在录音，松开发送" : "按住说话")
+    }
+}
+
+// MARK: - Avatar hero
+
+/// The virtual avatar: large, circular, with state-driven motion.
+/// - Idle: gentle continuous bobbing (slow scale + vertical oscillation).
+/// - Listening: an expanding pulsing ring + avatar scaled up slightly.
+/// - Speaking: a small audio waveform bar under the avatar.
+/// - Thinking: three animated dots under the avatar.
+private struct AvatarHeroView: View {
+    enum State: Equatable {
+        case idle, listening, speaking, thinking, disconnected
+    }
+
+    let state: State
+    let statusText: String
+
+    @State private var bobPhase = false
+    @State private var pulsePhase = false
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                // Pulsing ring while listening.
+                if state == .listening {
+                    Circle()
+                        .stroke(Color.red.opacity(0.55), lineWidth: 3)
+                        .frame(width: 212, height: 212)
+                        .scaleEffect(pulsePhase ? 1.28 : 1.0)
+                        .opacity(pulsePhase ? 0 : 0.7)
+                        .animation(.easeOut(duration: 1.2).repeatForever(autoreverses: false), value: pulsePhase)
+                        .onAppear { pulsePhase = true }
+                }
+                // Avatar image, gently bobbing while idle.
+                Image("XiaoYue")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 200, height: 200)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color.pink.opacity(0.35), lineWidth: 3))
+                    .shadow(color: .pink.opacity(0.20), radius: 14, x: 0, y: 8)
+                    .scaleEffect(state == .idle ? (bobPhase ? 1.02 : 0.98) : 1.0)
+                    .offset(y: state == .idle ? (bobPhase ? -5 : 5) : 0)
+                    .animation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true), value: bobPhase)
+                    .onAppear { bobPhase = true }
+            }
+            .scaleEffect(state == .listening ? 1.06 : (state == .speaking ? 1.03 : 1.0))
+            .animation(.easeInOut(duration: 0.3), value: state)
+            .onChange(of: state) { newState in
+                // Reset the pulse so it restarts cleanly next time we listen.
+                if newState != .listening {
+                    pulsePhase = false
+                }
+            }
+
+            Text("小月")
+                .font(.title2)
+                .fontWeight(.bold)
+
+            Text(statusText)
+                .font(.footnote)
+                .foregroundColor(.secondary)
+
+            // Speaking waveform / thinking dots (fixed height so layout is stable).
+            ZStack {
+                if state == .speaking {
+                    WaveformView()
+                } else if state == .thinking {
+                    ThinkingDotsView()
+                }
+            }
+            .frame(height: 26)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 24)
+                .fill(Color(red: 1.0, green: 0.97, blue: 0.96))
+        )
+        .padding(.horizontal, 16)
+    }
+}
+
+/// A row of vertical bars animating while the avatar speaks.
+private struct WaveformView: View {
+    private let heights: [CGFloat] = [10, 18, 26, 18, 10]
+    @State private var phase = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<heights.count, id: \.self) { i in
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.pink.opacity(0.75))
+                    .frame(width: 4, height: phase ? heights[i] : heights[i] * 0.4)
+                    .animation(.easeInOut(duration: 0.45).repeatForever(autoreverses: true).delay(Double(i) * 0.09), value: phase)
+            }
+        }
+        .onAppear { phase = true }
+    }
+}
+
+/// Three dots animating while the avatar is thinking.
+private struct ThinkingDotsView: View {
+    @State private var phase = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .fill(Color.secondary)
+                    .frame(width: 7, height: 7)
+                    .opacity(phase ? 1.0 : 0.25)
+                    .animation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true).delay(Double(i) * 0.18), value: phase)
+            }
+        }
+        .onAppear { phase = true }
     }
 }
 
