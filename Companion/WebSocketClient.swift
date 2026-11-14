@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Protocol (backend at ws://192.144.154.194:8080):
 ///   Client -> Server:
-///     {"type":"start","format":"pcm16k","voice":"<voice_id>"} — before sending audio
+///     {"type":"start","format":"pcm16k"}   — before sending audio
 ///     binary PCM16 16kHz mono chunks       — while recording
 ///     {"type":"stop"}                      — when the user stops speaking
 ///     {"type":"text","text":"..."}         — text fallback (treated like a transcript)
@@ -84,8 +84,8 @@ final class WebSocketClient {
         task != nil && status == .connected
     }
 
-    func sendStart(voice: String) {
-        sendJSON(["type": "start", "format": "pcm16k", "voice": voice])
+    func sendStart() {
+        sendJSON(["type": "start", "format": "pcm16k"])
     }
 
     func sendStop() {
