@@ -24,6 +24,7 @@ final class ChatViewModel: ObservableObject {
     @Published var connectionStatus: WebSocketClient.Status = .disconnected
     @Published var isRecording = false
     @Published var isWaitingReply = false
+    @Published var isSpeaking = false
     @Published var micDenied = false
     @Published var inputText = ""
 
@@ -120,6 +121,7 @@ final class ChatViewModel: ObservableObject {
                 self.messages.append(ChatMessage(role: .error, text: "录音启动失败，请重试"))
                 return
             }
+            self.isSpeaking = false
             self.socket.sendStart(voice: self.selectedVoiceId)
             self.isRecording = true
         }
@@ -144,6 +146,7 @@ final class ChatViewModel: ObservableObject {
         if !socket.isConnected {
             socket.connect()
         }
+        isSpeaking = false
         socket.sendText(text)
         isWaitingReply = true
     }
@@ -158,12 +161,15 @@ final class ChatViewModel: ObservableObject {
             isWaitingReply = false
             messages.append(ChatMessage(role: .assistant, text: text))
         case .audioChunk(let data):
+            isSpeaking = true
             audio.playAudioChunk(data)
         case .turnDone:
             isWaitingReply = false
+            isSpeaking = false
             audio.finishPlayback()
         case .error(let message):
             isWaitingReply = false
+            isSpeaking = false
             messages.append(ChatMessage(role: .error, text: message))
         }
     }
