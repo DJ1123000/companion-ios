@@ -1,12 +1,13 @@
 import SwiftUI
 
+/// What the avatar is doing right now, derived from the view model.
+/// File scope so both ContentView and AvatarHeroView can use it.
+enum AvatarState: Equatable {
+    case idle, listening, speaking, thinking, disconnected
+}
+
 struct ContentView: View {
     @StateObject private var viewModel = ChatViewModel()
-
-    /// What the avatar is doing right now, derived from the view model.
-    private enum AvatarState: Equatable {
-        case idle, listening, speaking, thinking, disconnected
-    }
 
     private var avatarState: AvatarState {
         if viewModel.isRecording { return .listening }
@@ -218,16 +219,17 @@ struct ContentView: View {
 /// - Listening: an expanding pulsing ring + avatar scaled up slightly.
 /// - Speaking: a small audio waveform bar under the avatar.
 /// - Thinking: three animated dots under the avatar.
-private struct AvatarHeroView: View {
-    enum State: Equatable {
-        case idle, listening, speaking, thinking, disconnected
-    }
-
-    let state: State
+struct AvatarHeroView: View {
+    let state: AvatarState
     let statusText: String
 
     @State private var bobPhase = false
     @State private var pulsePhase = false
+
+    init(state: AvatarState, statusText: String) {
+        self.state = state
+        self.statusText = statusText
+    }
 
     var body: some View {
         VStack(spacing: 8) {
