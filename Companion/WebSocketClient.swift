@@ -4,18 +4,18 @@ import Foundation
 ///
 /// Protocol (backend at ws://192.144.154.194:8080):
 ///   Client -> Server:
-///     {"type":"start","format":"pcm16k"}   — before sending audio
+///     {"type":"start","format":"pcm16k","voice":"<voice_id>"} — before sending audio
 ///     binary PCM16 16kHz mono chunks       — while recording
 ///     {"type":"stop"}                      — when the user stops speaking
 ///     {"type":"text","text":"..."}         — text fallback (treated like a transcript)
 ///   Server -> Client:
-///     {"type":"transcript","text":"..."}   — what the user said
+///     {"type":"transcript","text":"..."}   — what the user said (real ASR text)
 ///     {"type":"reply_text","text":"..."}   — the assistant's reply text
 ///     binary TTS audio (PCM16 16kHz mono, or mp3)
 ///     {"type":"done"}                      — end of this turn
 ///     {"type":"error","message":"..."}     — error, show the message
 final class WebSocketClient {
-    static let serverURL = URL(string: "ws://192.144.154.194:8080")!
+    private static let serverURLString = "ws://192.144.154.194:8080"
 
     enum Event {
         case transcript(String)
@@ -56,11 +56,15 @@ final class WebSocketClient {
 
     private func doConnect() {
         guard task == nil, !isConnecting else { return }
+        guard let url = URL(string: Self.serverURLString) else {
+            status = .failed("无效的服务器地址")
+            return
+        }
         isConnecting = true
         status = .connecting
         let session = URLSession(configuration: .default)
         self.session = session
-        let task = session.webSocketTask(with: Self.serverURL)
+        let task = session.webSocketTask(with: url)
         self.task = task
         task.resume()
         isConnecting = false
@@ -80,8 +84,8 @@ final class WebSocketClient {
         task != nil && status == .connected
     }
 
-    func sendStart() {
-        sendJSON(["type": "start", "format": "pcm16k"])
+    func sendStart(voice: String) {
+        sendJSON(["type": "start", "format": "pcm16k", "voice": voice])
     }
 
     func sendStop() {
