@@ -48,6 +48,8 @@ struct ContentView: View {
 
                 textInputRow
 
+                voicePickerRow
+
                 holdToTalkButton
                     .padding(.top, 12)
                     .padding(.bottom, 20)
@@ -113,6 +115,23 @@ struct ContentView: View {
         case .assistant: return Color(.systemGray5)
         case .error: return Color(.systemRed).opacity(0.15)
         }
+    }
+
+    private var voicePickerRow: some View {
+        HStack(spacing: 8) {
+            Text("音色")
+                .font(.footnote)
+                .foregroundColor(.secondary)
+            Picker("音色", selection: $viewModel.selectedVoiceId) {
+                ForEach(viewModel.voices) { voice in
+                    Text(voice.name).tag(voice.id)
+                }
+            }
+            .pickerStyle(.menu)
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.top, 8)
     }
 
     private var textInputRow: some View {
