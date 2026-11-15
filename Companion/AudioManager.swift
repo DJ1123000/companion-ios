@@ -2,7 +2,8 @@ import AVFoundation
 import Foundation
 
 /// Recording (16kHz 16-bit mono PCM via AVAudioEngine tap) and
-/// playback (PCM streaming via AVAudioPlayerNode, mp3 via AVAudioPlayer).
+/// playback (WAV via AVAudioPlayer, PCM streaming via AVAudioPlayerNode,
+/// mp3 via AVAudioPlayer).
 /// No on-device STT / LLM / TTS: audio only goes to / comes from the server.
 ///
 /// V2 recording fixes (mic-tap crash):
@@ -14,11 +15,25 @@ import Foundation
 /// - Taps are never installed or removed while the engine is running: the
 ///   engine is stopped first in both startRecording and stopRecording.
 /// - No force-unwraps anywhere on the audio path; failures print and return.
+///
+/// V3 playback (WAV passthrough):
+/// - The backend now sends the original GLM-4-Voice WAV bytes as binary
+///   frames (RIFF header included, 22050Hz mono 16-bit) instead of
+///   resampled 16kHz PCM. WAV chunks are buffered and played whole with
+///   AVAudioPlayer on finishPlayback(), so the voice is heard exactly as
+///   the model produced it (no resampling, no wrong sample rate).
+/// - Raw 16kHz PCM16 still streams via AVAudioPlayerNode as a fallback.
+/// - finishPlayback() returns true when buffered WAV/mp3 audio started
+///   playing; the caller keeps the "speaking" state until
+///   onPlaybackFinished fires (AVAudioPlayerDelegate).
 final class AudioManager: NSObject {
     static let pcmSampleRate: Double = 16000
 
     /// Called on a background queue with each captured PCM16 chunk.
     var onAudioChunk: ((Data) -> Void)?
+
+    /// Called on the main queue when a buffered WAV/mp3 finishes playing.
+    var onPlaybackFinished: (() -> Void)?
 
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
@@ -28,6 +43,9 @@ final class AudioManager: NSObject {
     private var mp3Buffer = Data()
     private var mp3Mode = false
     private var mp3Player: AVAudioPlayer?
+    private var wavBuffer = Data()
+    private var wavMode = false
+    private var wavPlayer: AVAudioPlayer?
     private let sendQueue = DispatchQueue(label: "companion.audio.send")
 
     override init() {
@@ -174,10 +192,19 @@ final class AudioManager: NSObject {
 
     // MARK: - Playback
 
-    /// Feed one binary chunk from the server. PCM16 chunks are streamed
-    /// immediately; mp3 with an ID3 tag is buffered and played at `finishPlayback()`.
+    /// Feed one binary chunk from the server. WAV (RIFF) and mp3 (ID3) are
+    /// buffered and played whole at `finishPlayback()`; anything else is
+    /// streamed immediately as 16kHz PCM16.
     func playAudioChunk(_ data: Data) {
         guard !data.isEmpty else { return }
+        if !wavMode && !mp3Mode && isWAV(data) {
+            wavMode = true
+            wavBuffer = Data()
+        }
+        if wavMode {
+            wavBuffer.append(data)
+            return
+        }
         if !mp3Mode && isMP3(data) {
             mp3Mode = true
             mp3Buffer = Data()
@@ -189,24 +216,52 @@ final class AudioManager: NSObject {
         playPCM(data)
     }
 
-    /// Call when the server sends {"type":"done"}: flushes a buffered mp3.
-    func finishPlayback() {
-        guard mp3Mode else { return }
+    /// Call when the server sends {"type":"done"}: flushes a buffered WAV
+    /// or mp3. Returns true when buffered audio started playing — the
+    /// caller should keep the "speaking" state until onPlaybackFinished
+    /// fires. Returns false when nothing was buffered (PCM path).
+    @discardableResult
+    func finishPlayback() -> Bool {
+        if wavMode {
+            wavMode = false
+            let data = wavBuffer
+            wavBuffer = Data()
+            guard !data.isEmpty else { return false }
+            do {
+                let player = try AVAudioPlayer(data: data)
+                player.delegate = self
+                wavPlayer = player
+                player.prepareToPlay()
+                player.play()
+                return true
+            } catch {
+                print("wav playback error: \(error)")
+                return false
+            }
+        }
+        guard mp3Mode else { return false }
         mp3Mode = false
         let data = mp3Buffer
         mp3Buffer = Data()
-        guard !data.isEmpty else { return }
+        guard !data.isEmpty else { return false }
         do {
             let player = try AVAudioPlayer(data: data)
+            player.delegate = self
             mp3Player = player
             player.prepareToPlay()
             player.play()
+            return true
         } catch {
             print("mp3 playback error: \(error)")
+            return false
         }
     }
 
     func stopPlayback() {
+        wavMode = false
+        wavBuffer = Data()
+        wavPlayer?.stop()
+        wavPlayer = nil
         mp3Mode = false
         mp3Buffer = Data()
         mp3Player?.stop()
@@ -246,9 +301,23 @@ final class AudioManager: NSObject {
         playerNode.scheduleBuffer(buffer)
     }
 
+    /// WAV files start with the 4-byte "RIFF" magic.
+    private func isWAV(_ data: Data) -> Bool {
+        data.count >= 4 && data[0] == 0x52 && data[1] == 0x49
+            && data[2] == 0x46 && data[3] == 0x46 // "RIFF"
+    }
+
     /// Only an ID3 tag counts as mp3. (A bare 0xFF frame-sync check would
     /// misfire on raw PCM16 data, which can start with those bytes.)
     private func isMP3(_ data: Data) -> Bool {
         data.count >= 3 && data[0] == 0x49 && data[1] == 0x44 && data[2] == 0x33 // "ID3"
+    }
+}
+
+// MARK: - AVAudioPlayerDelegate
+
+extension AudioManager: AVAudioPlayerDelegate {
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        onPlaybackFinished?()
     }
 }

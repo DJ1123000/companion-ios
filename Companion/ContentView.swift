@@ -41,7 +41,9 @@ struct ContentView: View {
 
                 textInputRow
 
-                holdToTalkButton
+                modeSwitcher
+
+                voiceOrbSection
                     .padding(.top, 12)
                     .padding(.bottom, 20)
             }
@@ -92,7 +94,7 @@ struct ContentView: View {
             ScrollView {
                 LazyVStack(spacing: 10) {
                     if viewModel.messages.isEmpty {
-                        Text("按住下方按钮说话，或输入文字开始聊天")
+                        Text("点一下下面那个球说话，或输入文字开始聊天")
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                             .padding(.top, 24)
@@ -161,35 +163,159 @@ struct ContentView: View {
         .padding(.top, 10)
     }
 
-    private var holdToTalkButton: some View {
-        let recording = viewModel.isRecording
-        return ZStack {
-            Circle()
-                .fill(recording ? Color.red.opacity(0.15) : Color.blue.opacity(0.1))
-                .frame(width: 96, height: 96)
-            Circle()
-                .fill(recording ? Color.red : Color.blue)
-                .frame(width: 76, height: 76)
-                .overlay(
-                    Image(systemName: recording ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 28))
-                        .foregroundColor(.white)
-                )
-                .scaleEffect(recording ? 1.08 : 1.0)
-                .animation(.easeInOut(duration: 0.15), value: recording)
+    /// Two input modes: real-time conversation (tap to start/stop) or
+    /// hold-to-talk (press and hold). The choice is persisted.
+    private var modeSwitcher: some View {
+        Picker("输入方式", selection: $viewModel.inputMode) {
+            Text(InputMode.realtime.label).tag(InputMode.realtime)
+            Text(InputMode.holdToTalk.label).tag(InputMode.holdToTalk)
         }
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in viewModel.startTalking() }
-                .onEnded { _ in viewModel.stopTalking() }
-        )
-        .overlay(
-            Text(recording ? "松开发送" : "按住说话")
+        .pickerStyle(.segmented)
+        .padding(.horizontal)
+        .padding(.top, 10)
+    }
+
+    /// The voice input area: a large dynamic 3D orb (no microphone icon)
+    /// plus a hint label. The gesture depends on the selected mode.
+    private var voiceOrbSection: some View {
+        VStack(spacing: 8) {
+            voiceOrb
+            Text(orbHintText)
                 .font(.footnote)
                 .foregroundColor(.secondary)
-                .offset(y: 58)
-        )
-        .accessibilityLabel(recording ? "正在录音，松开发送" : "按住说话")
+        }
+    }
+
+    private var orbHintText: String {
+        if viewModel.isRecording {
+            return viewModel.inputMode == .realtime ? "正在听，点一下结束" : "松开发送"
+        }
+        if viewModel.isSpeaking {
+            return "小月正在说…"
+        }
+        return viewModel.inputMode == .realtime ? "点一下开始说话" : "按住说话"
+    }
+
+    private var voiceOrb: some View {
+        Group {
+            if viewModel.inputMode == .realtime {
+                VoiceOrbView(state: avatarState)
+                    .onTapGesture { viewModel.toggleTalking() }
+            } else {
+                VoiceOrbView(state: avatarState)
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { _ in viewModel.startTalking() }
+                            .onEnded { _ in viewModel.stopTalking() }
+                    )
+            }
+        }
+        .accessibilityLabel(orbHintText)
+    }
+}
+
+// MARK: - Voice orb
+
+/// A large dynamic 3D voice button — a glossy gradient sphere, no
+/// microphone icon. State-driven motion:
+/// - Idle: gentle breathing (slow scale + vertical oscillation).
+/// - Listening: an expanding pulsing ring + the orb scales up and glows.
+/// - Speaking: the orb sits slightly enlarged + a waveform bar animates.
+/// - Thinking: three animated dots under it.
+struct VoiceOrbView: View {
+    let state: AvatarState
+
+    @State private var breathePhase = false
+    @State private var ringPhase = false
+
+    private let orbSize: CGFloat = 128
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                // Pulsing ring while listening.
+                if state == .listening {
+                    Circle()
+                        .stroke(Color.pink.opacity(0.55), lineWidth: 4)
+                        .frame(width: orbSize + 22, height: orbSize + 22)
+                        .scaleEffect(ringPhase ? 1.35 : 1.0)
+                        .opacity(ringPhase ? 0 : 0.8)
+                        .animation(.easeOut(duration: 1.1).repeatForever(autoreverses: false), value: ringPhase)
+                        .onAppear { ringPhase = true }
+                }
+
+                // Soft outer glow for 3D depth.
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            gradient: Gradient(colors: [
+                                Color.pink.opacity(state == .listening ? 0.5 : 0.3),
+                                Color.pink.opacity(0.0)
+                            ]),
+                            center: .center,
+                            startRadius: 24,
+                            endRadius: 92
+                        )
+                    )
+                    .frame(width: orbSize + 56, height: orbSize + 56)
+
+                // The orb itself: a warm radial-gradient sphere.
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            gradient: Gradient(colors: [
+                                Color.white,
+                                Color(red: 1.0, green: 0.88, blue: 0.78),
+                                Color(red: 1.0, green: 0.68, blue: 0.62),
+                                Color(red: 0.96, green: 0.55, blue: 0.55)
+                            ]),
+                            center: UnitPoint(x: 0.35, y: 0.3),
+                            startRadius: 8,
+                            endRadius: 70
+                        )
+                    )
+                    .frame(width: orbSize, height: orbSize)
+                    .shadow(color: .pink.opacity(0.45), radius: 20, x: 0, y: 12)
+
+                // Glossy highlight (top-left) for a 3D sheen.
+                Ellipse()
+                    .fill(Color.white.opacity(0.55))
+                    .frame(width: 52, height: 30)
+                    .blur(radius: 6)
+                    .offset(x: -22, y: -30)
+            }
+            // State-driven scale (listening bigger, speaking slightly up).
+            .scaleEffect(stateScale)
+            .animation(.easeInOut(duration: 0.3), value: state)
+            // Gentle continuous breathing, all states.
+            .scaleEffect(breathePhase ? 1.02 : 0.99)
+            .offset(y: breathePhase ? -3 : 3)
+            .animation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true), value: breathePhase)
+            .onAppear { breathePhase = true }
+            .onChange(of: state) { newState in
+                if newState != .listening {
+                    ringPhase = false
+                }
+            }
+
+            // Speaking waveform / thinking dots (fixed height, stable layout).
+            ZStack {
+                if state == .speaking {
+                    WaveformView()
+                } else if state == .thinking {
+                    ThinkingDotsView()
+                }
+            }
+            .frame(height: 26)
+        }
+    }
+
+    private var stateScale: CGFloat {
+        switch state {
+        case .listening: return 1.10
+        case .speaking: return 1.05
+        default: return 1.0
+        }
     }
 }
 

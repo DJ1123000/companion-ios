@@ -8,6 +8,21 @@ struct ChatMessage: Identifiable, Equatable {
     var text: String
 }
 
+/// How the user talks to the companion.
+/// - realtime: tap once to start listening, tap again to stop and send.
+/// - holdToTalk: press and hold to talk, release to send (default).
+enum InputMode: String, CaseIterable {
+    case realtime = "realtime"
+    case holdToTalk = "hold"
+
+    var label: String {
+        switch self {
+        case .realtime: return "实时对话"
+        case .holdToTalk: return "长按说话"
+        }
+    }
+}
+
 /// Owns the WebSocket + audio plumbing and the chat state for ContentView.
 /// NOTE: No voice selection — the backend is GLM-4-Voice end-to-end with a
 /// fixed voice, so the client sends no "voice" field in the start message.
@@ -19,12 +34,21 @@ final class ChatViewModel: ObservableObject {
     @Published var isSpeaking = false
     @Published var micDenied = false
     @Published var inputText = ""
+    @Published var inputMode: InputMode = .holdToTalk {
+        didSet {
+            UserDefaults.standard.set(inputMode.rawValue, forKey: "companion.inputMode")
+        }
+    }
 
     private let socket = WebSocketClient()
     private let audio = AudioManager()
     private var wantsRecording = false
 
     init() {
+        if let raw = UserDefaults.standard.string(forKey: "companion.inputMode"),
+           let saved = InputMode(rawValue: raw) {
+            inputMode = saved
+        }
         socket.onStatusChange = { [weak self] status in
             DispatchQueue.main.async { self?.connectionStatus = status }
         }
@@ -33,6 +57,9 @@ final class ChatViewModel: ObservableObject {
         }
         audio.onAudioChunk = { [weak self] data in
             self?.socket.sendAudio(data)
+        }
+        audio.onPlaybackFinished = { [weak self] in
+            DispatchQueue.main.async { self?.isSpeaking = false }
         }
     }
 
@@ -52,7 +79,16 @@ final class ChatViewModel: ObservableObject {
         socket.connect()
     }
 
-    // MARK: - Hold to talk
+    // MARK: - Voice input
+
+    /// Real-time mode: tap to start listening, tap again to stop and send.
+    func toggleTalking() {
+        if isRecording {
+            stopTalking()
+        } else {
+            startTalking()
+        }
+    }
 
     func startTalking() {
         guard !isRecording else { return }
@@ -115,11 +151,17 @@ final class ChatViewModel: ObservableObject {
             audio.playAudioChunk(data)
         case .turnDone:
             isWaitingReply = false
-            isSpeaking = false
-            audio.finishPlayback()
+            // If buffered WAV/mp3 audio just started playing, keep the
+            // speaking state until onPlaybackFinished fires; otherwise
+            // (PCM path) the audio is already done.
+            let buffered = audio.finishPlayback()
+            if !buffered {
+                isSpeaking = false
+            }
         case .error(let message):
             isWaitingReply = false
             isSpeaking = false
+            audio.stopPlayback()
             messages.append(ChatMessage(role: .error, text: message))
         }
     }
